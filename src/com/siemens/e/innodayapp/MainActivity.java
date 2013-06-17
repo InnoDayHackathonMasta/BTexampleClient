@@ -1,0 +1,636 @@
+package com.siemens.e.innodayapp;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.UUID;
+
+import android.app.Activity;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothServerSocket;
+import android.bluetooth.BluetoothSocket;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Message;
+import android.text.method.ScrollingMovementMethod;
+import android.util.Log;
+import android.view.View;
+import android.view.View.OnClickListener;
+import android.widget.Button;
+import android.widget.TextView;
+import android.widget.Toast;
+
+public class MainActivity extends Activity {
+
+	private final int REQUEST_ENABLE_BT = 1;
+
+	public static final String BT_UUID_CHAIN = "201BB686-672C-46FA-B86B-B9BA8BAACE71";
+	public static final String BT_UUID_CLIENTINFO = "7F814AFE-90D0-4768-ADAD-89FD2F7F851A";
+
+	public static final String HANDLER_COMMAND_NUM = "CommandNum";
+	public static final String HANDLER_COMMAND_VALUE = "Value";
+	public static final int HANDLER_COMMAND_UPDATE_PHYSID = 1;
+	public static final int HANDLER_COMMAND_UPDATE_LOGICALID = 2;
+	public static final int HANDLER_COMMAND_UPDATE_MCPCOMMAND =3;
+	public static final int HANDLER_COMMAND_UPDATE_CHARTODISPLAY = 4;
+	
+	ClientApplication stateMachine;
+
+	ChainLeft chainLeft;
+
+	ArrayList<String> mArrayAdapter = new ArrayList<String>();
+	BluetoothAdapter mBluetoothAdapter;
+
+	static final String TAG = "BTExampleClient:MainActivity";
+
+	TextView tvLogOut = null;
+	static TextView tvMcpCommand = null;
+	static TextView tvChar = null;
+	static TextView tvPhysicalId = null;
+	static TextView tvLogicalId = null;
+
+	private Button btnConnectMcp;
+
+	// Handle updates of the UI from non UI Threads
+	static Handler handler = new Handler() {
+
+		@Override
+		public void handleMessage(Message msg) {
+
+			Bundle bndl = msg.getData();
+
+			int command = bndl.getInt(HANDLER_COMMAND_NUM);
+			String textToSet = bndl.getString(HANDLER_COMMAND_VALUE);
+
+			switch (command) {
+				case HANDLER_COMMAND_UPDATE_PHYSID:
+					// Set physical ID
+					tvPhysicalId.setText(textToSet);
+					break;
+				case HANDLER_COMMAND_UPDATE_LOGICALID:
+					// Set physical ID
+					tvLogicalId.setText(textToSet);
+					break;
+				case HANDLER_COMMAND_UPDATE_MCPCOMMAND:
+					// Set physical ID
+					tvMcpCommand.setText(textToSet);
+					break;
+				case HANDLER_COMMAND_UPDATE_CHARTODISPLAY:
+					// Set physical ID
+					tvChar.setText(textToSet);
+					break;
+				default:
+					break;
+			}
+
+			super.handleMessage(msg);
+		}
+
+	};
+
+	@Override
+	protected void onCreate(Bundle savedInstanceState) {
+
+		super.onCreate(savedInstanceState);
+		setContentView(R.layout.activity_main);
+
+		// Clean Up UI
+		tvLogOut = (TextView) findViewById(R.id.main_txt_log_output);
+		tvChar = (TextView) findViewById(R.id.main_txt_char_value);
+		tvMcpCommand = (TextView) findViewById(R.id.main_txt_current_command);
+		tvPhysicalId = (TextView) findViewById(R.id.main_txt_physical_id);
+		tvLogicalId = (TextView) findViewById(R.id.main_txt_logical_id);
+
+		btnConnectMcp = (Button) findViewById(R.id.main_btn_connect_mcp);
+		btnConnectMcp.setOnClickListener(new OnClickListener() {
+
+			@Override
+			public void onClick(View v) {
+				btnConnectMcp.setEnabled(false);
+				startMCPConnect();
+			}
+		});
+
+		tvLogOut.setText("");
+		tvLogOut.setMovementMethod(new ScrollingMovementMethod());
+
+		stateMachine = (ClientApplication) getApplication();
+
+		mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+
+		// null if no Adapter present
+		if (mBluetoothAdapter == null) {
+			// Device does not support Bluetooth
+		}
+
+		// enable Bluetooth (forced)
+		if (!mBluetoothAdapter.isEnabled()) {
+			Log.d(TAG, "enabling bluetooth");
+			mBluetoothAdapter.enable();
+		}
+
+	}
+
+	protected void startMCPConnect() {
+
+		// Register the BroadcastReceiver
+		IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_FOUND);
+		registerReceiver(mReceiver, filter); // Don't forget to unregister
+												// during onPause
+
+		// Start Disco
+		if (mBluetoothAdapter.startDiscovery()) {
+			Toast.makeText(this, "started seeking MCP", Toast.LENGTH_LONG)
+					.show();
+		} else {
+			Toast.makeText(this, "could not start Discovery Mode",
+					Toast.LENGTH_LONG).show();
+		}
+
+	}
+
+	protected void onPause() {
+		unregisterReceiver(mReceiver);
+		super.onPause();
+	}
+
+	// Create a BroadcastReceiver for ACTION_FOUND
+	private final BroadcastReceiver mReceiver = new BroadcastReceiver() {
+		public void onReceive(Context context, Intent intent) {
+			String action = intent.getAction();
+			// When discovery finds a device
+			if (BluetoothDevice.ACTION_FOUND.equals(action)) {
+				// Get the BluetoothDevice object from the Intent
+				BluetoothDevice device = intent
+						.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+				// Add the name and address to an array adapter to show in a
+				// ListView
+				mArrayAdapter
+						.add(device.getName() + "\n" + device.getAddress());
+				Log.d("BroadcastReceiver", "New Device: \n" + device.getName()
+						+ "\n" + device.getAddress());
+
+				if (device.getName() != null && device.getName().equals("MCP2")) {
+					// Cancel discovery because it will slow down the connection
+					handler.post(new AppendToLogViewRunnable(
+							"Discovery canceled: "
+									+ mBluetoothAdapter.cancelDiscovery()));
+					Log.d("BroadcastReceiver", "Got the MCP");
+					// Transformer MAC: F4:6D:04:5C:62:85
+					ConnectThread ct = new ConnectThread(
+							mBluetoothAdapter.getRemoteDevice(device
+									.getAddress()));
+					ct.start();
+
+					// finish();
+				}
+			}
+		}
+	};
+
+	private class ConnectThread extends Thread {
+		private final BluetoothSocket mmSocket;
+		private final BluetoothDevice mmDevice;
+		private InputStream mmInStream;
+		private OutputStream mmOutStream;
+
+		public ConnectThread(BluetoothDevice device) {
+			// Use a temporary object that is later assigned to mmSocket,
+			// because mmSocket is final
+			BluetoothSocket tmp = null;
+			mmDevice = device;
+
+			// Get a BluetoothSocket to connect with the given BluetoothDevice
+			try {
+				// MY_UUID is the app's UUID string, also used by the server
+				// code
+				// tmp =
+				// device.createRfcommSocketToServiceRecord(UUID.fromString(BT_UUID_CLIENTINFO));
+				tmp = device.createInsecureRfcommSocketToServiceRecord(UUID
+						.fromString(BT_UUID_CLIENTINFO));
+
+				Log.d("ConnectThread", "Got BT RfcommSocket from OS");
+			} catch (IOException e) {
+			}
+			mmSocket = tmp;
+		}
+
+		public void run() {
+
+			try {
+				// Connect the device through the socket. This will block
+				// until it succeeds or throws an exception
+				Log.d("ConnectThread", "We are trying to connect to MCP...");
+				mmSocket.connect();
+
+			} catch (IOException connectException) {
+
+				Log.d("ConnectThread", "IOException ", connectException);
+				// Unable to connect; close the socket and get out
+				try {
+					mmSocket.close();
+				} catch (IOException closeException) {
+				}
+				return;
+			}
+
+			// ****************************
+
+			try {
+				mmInStream = mmSocket.getInputStream();
+				mmOutStream = mmSocket.getOutputStream();
+			} catch (IOException e1) {
+				// TODO Auto-generated catch block
+				e1.printStackTrace();
+			}
+
+			Log.d("ConnectedThread", "Here we are going to send data!");
+			Log.d("Tag", "State: CONNECT2TAIL");
+			// We are now in the state of "connecting to tail"
+			stateMachine.setState(com.siemens.e.innodayapp.State.CONNECT2TAIL);
+
+			byte[] buffer = new byte[1024]; // buffer store for the stream
+
+			try {
+				// receive MAC of tailend and physicalID of this device
+				mmInStream.read(buffer);
+			} catch (IOException e) {
+				Log.d("ConnectedThread", "IOException", e);
+			}
+
+			int i;
+			for (i = 0; i < buffer.length && buffer[i] != 0; i++) {
+			}
+			String[] tmpStr = (new String(buffer, 0, i)).split(",");
+
+			// received MAC
+			String tailEndMAC = tmpStr[0];
+			// received physical ID
+			int physID = Integer.parseInt(tmpStr[1]);
+			stateMachine.setPhysicalID(physID);
+			sendUIUpdateToHandler(1, String.valueOf(physID));
+
+			Log.d("ConnectedThread", "MAC of TailEnd: " + tailEndMAC);
+
+			try {
+				mmInStream.close();
+				mmOutStream.close();
+				mmSocket.close();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+
+			//
+
+			chainLeft = new ChainLeft(tailEndMAC);
+			chainLeft.start();
+		}
+
+		/** Will cancel an in-progress connection, and close the socket */
+		public void cancel() {
+			try {
+				mmSocket.close();
+			} catch (IOException e) {
+			}
+		}
+
+		private void sendUIUpdateToHandler(int CommandNum, String Value) {
+
+			Bundle data = new Bundle();
+
+			data.putInt(HANDLER_COMMAND_NUM, HANDLER_COMMAND_UPDATE_PHYSID);
+			data.putString(HANDLER_COMMAND_VALUE, Value);
+
+			Message msg = new Message();
+			msg.setData(data);
+
+			handler.sendMessage(msg);
+
+		}
+
+		/* Call this from the main activity to send data to the remote device */
+		public void write(byte[] bytes) {
+			try {
+				mmOutStream.write(bytes);
+			} catch (IOException e) {
+			}
+		}
+	}
+
+	private class ChainLeft extends Thread {
+		private final BluetoothSocket mmSocket;
+		private final BluetoothDevice mmDevice;
+		private InputStream mmInStream;
+		private OutputStream mmOutStream;
+
+		public ChainLeft(String macAddress) {
+
+			// Use a temporary object that is later assigned to mmSocket,
+			// because mmSocket is final
+			BluetoothSocket tmp = null;
+			mmDevice = mBluetoothAdapter.getRemoteDevice(macAddress);
+			;
+
+			// Get a BluetoothSocket to connect with the given BluetoothDevice
+			try {
+				// MY_UUID is the app's UUID string, also used by the server
+				// code
+				// tmp =
+				// device.createRfcommSocketToServiceRecord(UUID.fromString(BT_UUID_CLIENTINFO));
+				tmp = mmDevice.createInsecureRfcommSocketToServiceRecord(UUID
+						.fromString(BT_UUID_CHAIN));
+
+				Log.d("ConnectThread", "Got BT RfcommSocket from OS");
+			} catch (IOException e) {
+			}
+			mmSocket = tmp;
+
+		}
+
+		public void run() {
+
+			try {
+				// Connect the device through the socket. This will block
+				// until it succeeds or throws an exception
+				Log.d("ChainLeft", "We are trying to connect to ChainEnd...");
+				mmSocket.connect();
+
+			} catch (IOException connectException) {
+
+				Log.d("ConnectThread", "IOException ", connectException);
+				// Unable to connect; close the socket and get out
+				try {
+					mmSocket.close();
+				} catch (IOException closeException) {
+				}
+				return;
+			}
+
+			Log.d(TAG, "State: CHAINMEMBER");
+			// We are now a member of the chain
+			ClientApplication clientApp = (ClientApplication) getApplication();
+			clientApp.setState(com.siemens.e.innodayapp.State.CHAINMEMBER);
+
+			InputStream tmpIn = null;
+			OutputStream tmpOut = null;
+
+			// Get the input and output streams, using temp objects because
+			// member streams are final
+			try {
+				tmpIn = mmSocket.getInputStream();
+				tmpOut = mmSocket.getOutputStream();
+			} catch (IOException e) {
+			}
+
+			mmInStream = tmpIn;
+			mmOutStream = tmpOut;
+
+			// handle successor connection
+			ChainRight chainRight = new ChainRight();
+			chainRight.start();
+
+			try {
+				// ASCII 97 = a --> Announcement
+
+				StringBuilder sb = new StringBuilder();
+				sb.append("a,");
+				sb.append(mBluetoothAdapter.getAddress());
+				mmOutStream.write(sb.toString().getBytes());
+
+			} catch (IOException e) {
+				Log.d("ChainLeft", "IOException", e);
+			}
+
+			while (true) {
+				// handle connection with predecessor
+				Log.d(TAG, "ChainLeft: Here we are going to send data!");
+				byte[] buffer = new byte[1024]; // buffer store for the stream
+
+				try {
+					mmInStream.read(buffer);
+				} catch (IOException e) {
+					Log.d("ChainLeft", "IOException", e);
+					break;
+				}
+
+				// TODO: msg for me?
+				// look into buffer to figure out if MCP sent some info relevant
+				// for me
+
+				String[] tmpStrings = Utility.extractStringFromByteArray(
+						buffer, 0);
+
+				for (String tmpStr : tmpStrings) {
+
+					Log.d(TAG, "ChainLeft: " + tmpStr);
+
+					if (!tmpStr.trim().isEmpty()) {
+						handler.post(new AppendToLogViewRunnable(
+								"Msg from left: " + tmpStr));
+					}
+
+					if (tmpStr.startsWith("R")) {
+						String[] reorder = tmpStr.split(",");
+						String logicalIDs = reorder[1];
+						int tmpLogicalID = Integer.parseInt(""
+								+ logicalIDs.charAt(clientApp.physicalID - 1));
+						clientApp.setLogicalID(tmpLogicalID);
+						sendUIUpdateToHandler(HANDLER_COMMAND_UPDATE_LOGICALID,
+								String.valueOf(clientApp.getLogicalID()));
+						sendUIUpdateToHandler(HANDLER_COMMAND_UPDATE_MCPCOMMAND, "R");
+						handler.post(new AppendToLogViewRunnable(
+								"Got logical ID: " + clientApp.getLogicalID()));
+					}
+
+					if (tmpStr.startsWith("D")) {
+
+						String[] display = tmpStr.split(",");
+						if (clientApp.getLogicalID() == Integer
+								.parseInt(display[1])) {
+							sendUIUpdateToHandler(HANDLER_COMMAND_UPDATE_MCPCOMMAND, "D");
+							handler.post(new AppendToLogViewRunnable(
+									"Got char to Display: " + display[2]));
+							sendUIUpdateToHandler(HANDLER_COMMAND_UPDATE_CHARTODISPLAY, display[2]);
+							
+							/************** ADRUINO CODE GOES HERE **********************/
+
+							/************* HERE ******************/
+
+							/************************************************************/
+						}
+
+					}
+				}
+				// TODO: send to right
+				if (chainRight.mmOutStream != null) {
+					try {
+						chainRight.mmOutStream.write(buffer);
+					} catch (IOException e) {
+						Log.d(TAG, "ChainLeft: IOException", e);
+					}
+				}
+			}
+
+		}
+
+		private void sendUIUpdateToHandler(int CommandNum, String Value) {
+
+			Bundle data = new Bundle();
+
+			data.putInt(HANDLER_COMMAND_NUM, CommandNum);
+			data.putString(HANDLER_COMMAND_VALUE, Value);
+
+			Message msg = new Message();
+			msg.setData(data);
+
+			handler.sendMessage(msg);
+
+		}
+
+		/* Call this from the main activity to send data to the remote device */
+		public void write(byte[] bytes) {
+			try {
+				mmOutStream.write(bytes);
+				mmOutStream.flush();
+			} catch (IOException e) {
+			}
+		}
+
+		/* Call this from the main activity to shutdown the connection */
+		public void cancel() {
+			try {
+				mmSocket.close();
+			} catch (IOException e) {
+			}
+		}
+	}
+
+	private class ChainRight extends Thread {
+		private final BluetoothServerSocket mmServerSocket;
+		private InputStream mmInStream;
+		private OutputStream mmOutStream;
+
+		public ChainRight() {
+			// Use a temporary object that is later assigned to mmServerSocket,
+			// because mmServerSocket is final
+
+			BluetoothServerSocket tmp = null;
+
+			try {
+				// MY_UUID is the app's UUID string, also used by the client
+				// code
+				tmp = mBluetoothAdapter
+						.listenUsingInsecureRfcommWithServiceRecord(
+								"BTexample", UUID.fromString(BT_UUID_CHAIN));
+			} catch (IOException e) {
+			}
+			mmServerSocket = tmp;
+		}
+
+		public void run() {
+			BluetoothSocket socket = null;
+			// Keep listening until exception occurs or a socket is returned
+
+			try {
+				Log.d(TAG, "ChainRight: I am listening...");
+				socket = mmServerSocket.accept();
+				Log.d(TAG, "ChainRight: Accepted a request");
+			} catch (IOException e) {
+				Log.e(TAG,"ChainRight: IO Exception while Server Socket Accept",e);
+			}
+
+			InputStream tmpIn = null;
+			OutputStream tmpOut = null;
+
+			// Get the input and output streams, using temp objects
+			try {
+				tmpIn = socket.getInputStream();
+				tmpOut = socket.getOutputStream();
+			} catch (IOException e) {
+			}
+
+			mmInStream = tmpIn;
+			mmOutStream = tmpOut;
+
+			Log.d(TAG, "ChainRight: Here we are going to listen for some data!");
+			byte[] buffer = new byte[1024]; // buffer store for the stream
+
+			while (true) {
+
+				try {
+					mmInStream.read(buffer);
+				} catch (IOException e) {
+					Log.d(TAG, "ChainRight: IOException", e);
+					// TODO: Hier ist die Verbindung abgebrochen handlen. Zurück
+					// auf listening
+				}
+
+				// sent msg to predeces
+				// TODO: Remove trailing zeros!
+				String[] tmpStr = Utility.extractStringFromByteArray(buffer, 0);
+				
+				handler.post(new AppendToLogViewRunnable("Msg from right: "	+ tmpStr[0]));
+
+				chainLeft.write(tmpStr[0].getBytes());
+
+			}
+		}
+
+		/** Will cancel the listening socket, and cause the thread to finish */
+		public void cancel() {
+			try {
+				mmServerSocket.close();
+			} catch (IOException e) {
+			}
+		}
+	}
+
+	/**
+	 * Utility function to append a line to the tvLogOut TextView which
+	 * automagically scrolls down to the last / most recent line.
+	 * 
+	 * @param logLine
+	 */
+	private void AppendToLogView(String logLine) {
+		tvLogOut.append(logLine + "\n");
+
+		// Do the scroll stuff
+		final int scrollAmount = tvLogOut.getLayout().getLineTop(
+				tvLogOut.getLineCount())
+				- tvLogOut.getHeight();
+		// if there is no need to scroll, scrollAmount will be <=0
+		if (scrollAmount > 0)
+			tvLogOut.scrollTo(0, scrollAmount);
+		else
+			tvLogOut.scrollTo(0, 0);
+	}
+
+	/**
+	 * Wraps AppendToLogView into a Runnable for the lovely .post() calls
+	 * 
+	 * @author gries01d
+	 * 
+	 */
+	public class AppendToLogViewRunnable implements Runnable {
+
+		protected String logLine;
+
+		public AppendToLogViewRunnable(String logLine) {
+			this.logLine = logLine;
+		}
+
+		@Override
+		public void run() {
+			// Append Line
+			AppendToLogView(logLine);
+		}
+
+	}
+
+}

@@ -1,0 +1,440 @@
+package com.siemens.e.innodayapp;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.UUID;
+
+import android.app.Activity;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothServerSocket;
+import android.bluetooth.BluetoothSocket;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.os.Bundle;
+import android.util.Log;
+import android.view.Menu;
+import android.widget.TextView;
+import android.widget.Toast;
+
+
+public class MainActivity extends Activity {
+
+	
+	private final int REQUEST_ENABLE_BT = 1;
+	
+	public static final String BT_UUID_CHAIN = "201BB686-672C-46FA-B86B-B9BA8BAACE71";
+	public static final String BT_UUID_CLIENTINFO = "7F814AFE-90D0-4768-ADAD-89FD2F7F851A";
+
+	
+	ArrayList<String> mArrayAdapter = new ArrayList<String>();
+	BluetoothAdapter mBluetoothAdapter;
+	
+	static final String TAG = "BTExampleClient:MainActivity";
+	
+	TextView tvLog = null;
+	TextView tvMcpCommand = null;
+	TextView tvChar = null;
+	TextView tvPhysicalId = null;
+	TextView tvLogicalId = null;
+	
+	@Override
+	protected void onCreate(Bundle savedInstanceState) {
+
+		super.onCreate(savedInstanceState);
+		setContentView(R.layout.activity_main);
+		
+		//Clean Up UI
+		
+		tvLog = (TextView) findViewById(R.id.main_txt_log_output);
+		tvChar = (TextView) findViewById(R.id.main_txt_char_value);
+		tvMcpCommand = (TextView) findViewById(R.id.main_txt_current_command);
+		tvPhysicalId = (TextView) findViewById(R.id.main_txt_physical_id);
+		tvLogicalId = (TextView) findViewById(R.id.main_txt_logical_id);
+
+		tvLog.setText("");
+		
+		mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+		
+		// null if no Adapter present
+		if (mBluetoothAdapter == null) {
+		    // Device does not support Bluetooth
+		}
+		
+		if (!mBluetoothAdapter.isEnabled()) {
+			Log.d(TAG,"enabling bluetooth");
+			mBluetoothAdapter.enable();
+			Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
+		    startActivityForResult(enableBtIntent, REQUEST_ENABLE_BT);
+		}
+		
+		// Register the BroadcastReceiver
+		IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_FOUND);
+		registerReceiver(mReceiver, filter); // Don't forget to unregister during onDestroy
+		
+		// asynchronous
+		boolean tmp = mBluetoothAdapter.startDiscovery();
+		
+		/* DEBUG */
+		Context context = getApplicationContext();
+		CharSequence text;
+		if(tmp){
+			text = "Discovery startetd";
+			
+		} else {
+			text = "Discovery not startetd";
+		}
+		int duration = Toast.LENGTH_SHORT;
+		Toast.makeText(context, text, duration).show();
+		
+	}
+	
+	protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+		
+		if(requestCode == REQUEST_ENABLE_BT){
+			if(resultCode != RESULT_OK){
+				Context context = getApplicationContext();
+				CharSequence text = "You have to allow BT - exiting...";
+				int duration = Toast.LENGTH_SHORT;
+				Toast.makeText(context, text, duration).show();
+			}
+		}
+		
+	}
+	
+	protected void onPause (){
+		unregisterReceiver(mReceiver);
+		super.onPause();
+	}
+
+	// Create a BroadcastReceiver for ACTION_FOUND
+	private final BroadcastReceiver mReceiver = new BroadcastReceiver() {
+	    public void onReceive(Context context, Intent intent) {
+	        String action = intent.getAction();
+	        // When discovery finds a device
+	        if (BluetoothDevice.ACTION_FOUND.equals(action)) {
+	            // Get the BluetoothDevice object from the Intent
+	            BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+	            // Add the name and address to an array adapter to show in a ListView
+	            mArrayAdapter.add(device.getName() + "\n" + device.getAddress());
+	            Log.d("BroadcastReceiver", "New Device: \n" + device.getName() + "\n" + device.getAddress());
+	            
+	            if(device.getName() != null && device.getName().equals("MCP")) {
+	            	
+	            	Log.d("BroadcastReceiver", "Got the MCP");
+	            	mBluetoothAdapter.cancelDiscovery();
+	            	 // Transformer MAC: F4:6D:04:5C:62:85
+	            	ConnectThread ct = new ConnectThread(mBluetoothAdapter.getRemoteDevice(device.getAddress()), BT_UUID_CLIENTINFO);
+					ct.start();
+					
+					//finish();
+	            }
+	        }
+	    }
+	};
+	
+	private class ConnectThread extends Thread {
+	    private final BluetoothSocket mmSocket;
+	    private final BluetoothDevice mmDevice;
+	 
+	    public ConnectThread(BluetoothDevice device, String uuid) {
+	        // Use a temporary object that is later assigned to mmSocket,
+	        // because mmSocket is final
+	        BluetoothSocket tmp = null;
+	        mmDevice = device;
+	 
+	        // Get a BluetoothSocket to connect with the given BluetoothDevice
+	        try {
+	            // MY_UUID is the app's UUID string, also used by the server code
+	            //tmp = device.createRfcommSocketToServiceRecord(UUID.fromString(BT_UUID_CLIENTINFO));
+	        	tmp = device.createInsecureRfcommSocketToServiceRecord(UUID.fromString(uuid));
+	        	 
+	        	Log.d("ConnectThread", "We have got a client socket!");
+	        } catch (IOException e) { }
+	        mmSocket = tmp;
+	    }
+	 
+	    public void run() {
+	        // Cancel discovery because it will slow down the connection
+	        mBluetoothAdapter.cancelDiscovery();
+	 
+	        try {
+	            // Connect the device through the socket. This will block
+	            // until it succeeds or throws an exception
+	        	Log.d("ConnectThread", "We are trying to connect to server...");
+	            mmSocket.connect();
+  
+	        } catch (IOException connectException) {
+	        	
+	        	Log.d("ConnectThread", "IOException ", connectException);
+	            // Unable to connect; close the socket and get out
+	            try {
+	                mmSocket.close();
+	            } catch (IOException closeException) { }
+	            return;
+	        }
+	 
+	        // Do work to manage the connection (in a separate thread)
+	        
+	        ClientApplication stateMachine = (ClientApplication) getApplication();
+	        
+	        if(stateMachine.getState() == com.siemens.e.innodayapp.State.UNCONNECTED){
+	        	ConnectedThread ct = new ConnectedThread(mmSocket);
+	        	ct.start();
+	    	}
+		    if(stateMachine.getState() == com.siemens.e.innodayapp.State.CONNECT2TAIL){
+	        	ChainThread ct = new ChainThread(mmSocket);
+	        	ct.start();
+	    	}
+	    
+	    }
+	 
+	    /** Will cancel an in-progress connection, and close the socket */
+	    public void cancel() {
+	        try {
+	            mmSocket.close();
+	        } catch (IOException e) { }
+	    }
+	}
+	
+	private class ConnectedThread extends Thread {
+	    private final BluetoothSocket mmSocket;
+	    private final InputStream mmInStream;
+	    private final OutputStream mmOutStream;
+	 
+	    public ConnectedThread(BluetoothSocket socket) {
+	        mmSocket = socket;
+	        InputStream tmpIn = null;
+	        OutputStream tmpOut = null;
+	 
+	        // Get the input and output streams, using temp objects because
+	        // member streams are final
+	        try {
+	            tmpIn = socket.getInputStream();
+	            tmpOut = socket.getOutputStream();
+	        } catch (IOException e) { }
+	 
+	        mmInStream = tmpIn;
+	        mmOutStream = tmpOut;
+	    }
+	 
+	    public void run() {
+	    	
+	    	Log.d("ConnectedThread", "Here we are going to send data!");
+	    	Log.d("Tag", "State: CONNECT2TAIL");
+	    	// We are now in the state of "connecting to tail"
+	    	ClientApplication stateMachine = (ClientApplication) getApplication();
+	    	stateMachine.setState(com.siemens.e.innodayapp.State.CONNECT2TAIL);
+	    	
+	        byte[] buffer = new byte[1024];  // buffer store for the stream
+	        
+	        try {
+	        	mmInStream.read(buffer);
+	        } catch (IOException e) {
+                Log.d("ConnectedThread", "IOException", e);
+            }
+	        //String macAdr = new String(buffer);
+
+			int i;
+			for (i = 0; i < buffer.length && buffer[i] != 0; i++) { }
+			String macAdr = new String(buffer, 0, i);
+
+	        Log.d("ConnectedThread", "Read Output: " + macAdr);
+	        
+	        Log.d("BroadcastReceiver", "Got the MCP");
+
+	        ConnectThread ct = new ConnectThread(mBluetoothAdapter.getRemoteDevice(macAdr), BT_UUID_CHAIN);
+			ct.start();
+			
+			try {
+				mmInStream.close();
+				mmOutStream.close();
+		        mmSocket.close();
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+	        
+	    }
+	 
+	    /* Call this from the main activity to send data to the remote device */
+	    public void write(byte[] bytes) {
+	        try {
+	            mmOutStream.write(bytes);
+	        } catch (IOException e) { }
+	    }
+	 
+	    /* Call this from the main activity to shutdown the connection */
+	    public void cancel() {
+	        try {
+	            mmSocket.close();
+	        } catch (IOException e) { }
+	    }
+	}
+	
+	private class ChainThread extends Thread {
+	    private final BluetoothSocket mmSocket;
+	    private final InputStream mmInStream;
+	    private final OutputStream mmOutStream;
+	 
+	    public ChainThread(BluetoothSocket socket) {
+	        mmSocket = socket;
+	        InputStream tmpIn = null;
+	        OutputStream tmpOut = null;
+	 
+	        // Get the input and output streams, using temp objects because
+	        // member streams are final
+	        try {
+	            tmpIn = socket.getInputStream();
+	            tmpOut = socket.getOutputStream();
+	        } catch (IOException e) { }
+	 
+	        mmInStream = tmpIn;
+	        mmOutStream = tmpOut;
+	    }
+	 
+	    public void run() {
+	    	
+	    	Log.d(TAG, "State: CHAINMEMBER");
+	    	// We are now a member of the chain
+	    	ClientApplication stateMachine = (ClientApplication) getApplication();
+	    	stateMachine.setState(com.siemens.e.innodayapp.State.CHAINMEMBER);
+	    	
+	    	// handle successor connection
+	    	AcceptThread ac = new AcceptThread(mmOutStream);
+	    	ac.start();
+	    	
+	    	try {
+	    		// ASCII 65 = A --> Announcement
+	        	mmOutStream.write(97);
+	        	mmOutStream.write(mBluetoothAdapter.getAddress().getBytes());
+	        	mmOutStream.write('\0');
+	        } catch (IOException e) {
+                Log.d("ChainThread", "IOException", e);
+            }
+	    	
+	    	while(true){
+		    	// handle connection with predecessor
+		    	Log.d(TAG, "ChainThread: Here we are going to send data!");
+		        byte[] buffer = new byte[1024];  // buffer store for the stream
+		        
+		        try {
+		        	mmInStream.read(buffer);
+		        } catch (IOException e) {
+	                Log.d("ChainThread", "IOException", e);
+	            }
+		        
+		        // TODO: msg for me?
+		        
+		        	// look into buffer to figure out if MCP sent some info relevant for me
+		        
+				int i;
+				for (i = 0; i < buffer.length && buffer[i] != 0; i++) { }
+				String macAdr = new String(buffer, 0, i);
+	
+		        Log.d("ChainThread", "Read Output - this should be MAC Adr of Tail: " + macAdr);
+		        
+		        // TODO: send msg from MCP through chain if successor present
+		        if(ac.mmOutStream != null){
+			        try {
+			        	ac.mmOutStream.write(buffer);
+			        } catch (IOException e) {
+		                Log.d(TAG, "AcceptThread: IOException", e);
+		            }
+		        }
+	    	}
+
+	    }
+	 
+	    /* Call this from the main activity to send data to the remote device */
+	    public void write(byte[] bytes) {
+	        try {
+	            mmOutStream.write(bytes);
+	        } catch (IOException e) { }
+	    }
+	 
+	    /* Call this from the main activity to shutdown the connection */
+	    public void cancel() {
+	        try {
+	            mmSocket.close();
+	        } catch (IOException e) { }
+	    }
+	}
+	
+	private class AcceptThread extends Thread {
+	    private final BluetoothServerSocket mmServerSocket;
+	    private InputStream mmInStream;
+	    private OutputStream mmOutStream;
+	    private OutputStream predecessorOutStream;
+	    
+	    public AcceptThread(OutputStream predecessorOutStream) {
+	        // Use a temporary object that is later assigned to mmServerSocket,
+	        // because mmServerSocket is final
+	       
+	    	BluetoothServerSocket tmp = null;
+	        this.predecessorOutStream = predecessorOutStream;
+	       
+	        try {
+	            // MY_UUID is the app's UUID string, also used by the client code
+	            tmp = mBluetoothAdapter.listenUsingInsecureRfcommWithServiceRecord("BTexample", UUID.fromString("a1857a7a-46c2-4f54-ad30-581fd2f77d97"));
+	        } catch (IOException e) { }
+	        mmServerSocket = tmp;
+	    }
+	 
+	    public void run() {
+	        BluetoothSocket socket = null;
+	        // Keep listening until exception occurs or a socket is returned
+	        while (true) {
+	            try {
+	            	Log.d(TAG, "AcceptThread: I am listening...");
+	                socket = mmServerSocket.accept();
+	                Log.d(TAG, "AcceptThread: Accepted a request");
+	            } catch (IOException e) {
+	                break;
+	            }
+	            
+		        InputStream tmpIn = null;
+		        OutputStream tmpOut = null;
+		 
+		        // Get the input and output streams, using temp objects
+		        try {
+		            tmpIn = socket.getInputStream();
+		            tmpOut = socket.getOutputStream();
+		        } catch (IOException e) { }
+		 
+		        mmInStream = tmpIn;
+		        mmOutStream = tmpOut;
+		   
+		    	Log.d(TAG, "AcceptThread: Here we are going to listen for some data!");
+		        byte[] buffer = new byte[1024];  // buffer store for the stream
+		        
+		        try {
+		        	mmInStream.read(buffer);
+		        } catch (IOException e) {
+	                Log.d(TAG, "AcceptThread: IOException", e);
+	            }
+		        
+		        // sent msg to predecessor
+		        try {
+					predecessorOutStream.write(buffer);
+				} catch (IOException e) {
+					Log.d(TAG, "AcceptThread: IOException", e);
+				}
+		        
+	        }
+	    }
+	 
+	    /** Will cancel the listening socket, and cause the thread to finish */
+	    public void cancel() {
+	        try {
+	            mmServerSocket.close();
+	        } catch (IOException e) { }
+	    }
+	}
+
+}
